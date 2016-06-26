@@ -24,9 +24,9 @@
 
 Dependencies:
 
-  * go >= 1.4
+  * go >= 1.5
   * geth
-  * redis-server
+  * redis-server >= 2.8.0
   * nodejs
   * nginx
 
@@ -159,14 +159,14 @@ otherwise you will get errors on start because of JSON comments.**
     // Require this share difficulty from miners
     "difficulty": 2000000000,
 
-    "hashrateExpiration": "30m",
-
     /* Reply error to miner instead of job if redis is unavailable.
-    Should save electricity to miners if pool is sick and they didn't set up failovers.
+      Should save electricity to miners if pool is sick and they didn't set up failovers.
     */
     "healthCheck": true,
     // Mark pool sick after this number of redis failures.
     "maxFails": 100,
+    // TTL for workers stats, usually should be equal to large hashrate window from API section
+    "hashrateExpiration": "3h",
 
     "policy": {
       "workers": 8,
@@ -187,6 +187,15 @@ otherwise you will get errors on start because of JSON comments.**
         "checkThreshold": 30,
         // Bad miner after this number of malformed requests
         "malformedLimit": 5
+      },
+      // Connection rate limit
+      "limits": {
+        "enabled": false,
+        // Number of initial connections
+        "limit": 30,
+        "grace": "5m",
+        // Increase allowed number of connections on each valid share
+        "limitJump": 10
       }
     }
   },
@@ -197,7 +206,8 @@ otherwise you will get errors on start because of JSON comments.**
     "listen": "0.0.0.0:8080",
     // Collect miners stats (hashrate, ...) in this interval
     "statsCollectInterval": "5s",
-
+    // Purge stale stats interval
+    "purgeInterval": "10m",
     // Fast hashrate estimation window for each miner from it's shares
     "hashrateWindow": "30m",
     // Long and precise hashrate from shares, 3h is cool, keep it
@@ -249,6 +259,10 @@ otherwise you will get errors on start because of JSON comments.**
     "enabled": false,
     // Pool fee percentage
     "poolFee": 1.0,
+    // Pool fees beneficiary address (leave it blank to disable fee withdrawals)
+    "poolFeeAddress": "",
+    // Donate 10% from pool fees to developers
+    "donate": true,
     // Unlock only if this number of blocks mined back
     "depth": 120,
     // Simply don't touch this option
@@ -264,6 +278,8 @@ otherwise you will get errors on start because of JSON comments.**
   // Pay out miners using this module
   "payouts": {
     "enabled": false,
+    // Require minimum number of peers on node
+    "requirePeers": 25,
     // Run payouts in this interval
     "interval": "12h",
     // Geth instance node rpc endpoint for payouts processing
@@ -278,8 +294,10 @@ otherwise you will get errors on start because of JSON comments.**
     "gas": "21000",
     "gasPrice": "50000000000",
     // Send payment only if miner's balance is >= 0.5 Ether
-    "threshold": 500000000
-  },
+    "threshold": 500000000,
+    // Perform BGSAVE on Redis after successful payouts session
+    "bgsave": false
+  }
 }
 ```
 
@@ -294,10 +312,15 @@ I recommend this deployment strategy:
 
 ### Notes
 
-Unlocking and payouts are sequential, 1st tx go, 2nd waiting for 1st to confirm and so on.
-You can disable that in code. Also, keep in mind that *unlocking and payouts will be stopped in case of any backend or geth failure*.
-You must restart module if you see such errors with the word *suspended*; I recommend running unlocker and payouts in a separate processes.
-Don't run payouts and unlocker as part of mining node.
+* Unlocking and payouts are sequential, 1st tx go, 2nd waiting for 1st to confirm and so on. You can disable that in code. Carefully read `docs/PAYOUTS.md`.
+* Also, keep in mind that **unlocking and payouts will halt in case of backend or node RPC errors**. In that case check everything and restart.
+* You must restart module if you see errors with the word *suspended*.
+* Don't run payouts and unlocker modules as part of mining node. Create separate configs for both, launch independently and make sure you have a single instance of each module running.
+* If `poolFeeAddress` is not specified all pool profit will remain on coinbase address. If it specified, make sure to periodically send some dust back required for payments.
+
+### Alternative Ethereum Implementations
+
+This pool is tested to work with [Ethcore's Parity](https://github.com/ethcore/parity). Mining and block unlocking works, but I am not sure about payouts and suggest to run *official* geth node for payments.
 
 ### Credits
 

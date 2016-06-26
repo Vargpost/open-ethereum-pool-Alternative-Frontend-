@@ -12,7 +12,7 @@
 		"blockRefreshInterval": "120ms",
 		"stateUpdateInterval": "3s",
 		"difficulty": 2000000000,
-		"hashrateExpiration": "30m",
+		"hashrateExpiration": "3h",
 
 		"healthCheck": true,
 		"maxFails": 100,
@@ -30,12 +30,18 @@
 			"refreshInterval": "1m",
 
 			"banning": {
-				"enabled": true,
+				"enabled": false,
 				"ipset": "blacklist",
 				"timeout": 1800,
 				"invalidPercent": 30,
 				"checkThreshold": 30,
 				"malformedLimit": 5
+			},
+			"limits": {
+				"enabled": false,
+				"limit": 30,
+				"grace": "5m",
+				"limitJump": 10
 			}
 		}
 	},
@@ -43,6 +49,7 @@
 	"api": {
 		"enabled": true,
 		"purgeOnly": false,
+		"purgeInterval": "10m",
 		"listen": "0.0.0.0:8080",
 		"statsCollectInterval": "5s",
 		"hashrateWindow": "30m",
@@ -75,6 +82,8 @@
 	"unlocker": {
 		"enabled": false,
 		"poolFee": 1.0,
+		"poolFeeAddress": "",
+		"donate": true,
 		"depth": 120,
 		"immatureDepth": 20,
 		"interval": "10m",
@@ -84,6 +93,7 @@
 
 	"payouts": {
 		"enabled": false,
+		"requirePeers": 25,
 		"interval": "120m",
 		"daemon": "http://127.0.0.1:8545",
 		"timeout": "10s",
@@ -91,7 +101,8 @@
 		"gas": "21000",
 		"gasPrice": "50000000000",
 		"autoGas": true,
-		"threshold": 500000000
+		"threshold": 500000000,
+		"bgsave": false
 	},
 
 	"newrelicEnabled": false,

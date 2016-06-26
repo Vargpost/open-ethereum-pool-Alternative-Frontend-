@@ -6,15 +6,18 @@ type JSONRpcReq struct {
 	Id     *json.RawMessage `json:"id"`
 	Method string           `json:"method"`
 	Params *json.RawMessage `json:"params"`
+}
 
-	// Stratum
+type StratumReq struct {
+	JSONRpcReq
 	Worker string `json:"worker"`
 }
 
 // Stratum
 type JSONPushMessage struct {
+	// FIXME: Temporarily add ID for Claymore compliance
+	Id      int64       `json:"id"`
 	Version string      `json:"jsonrpc"`
-	Method  string      `json:"method,omitempty"`
 	Result  interface{} `json:"result"`
 }
 

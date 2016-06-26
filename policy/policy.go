@@ -52,7 +52,7 @@ type Stats struct {
 
 type PolicyServer struct {
 	sync.RWMutex
-	statsMu    sync.RWMutex
+	statsMu    sync.Mutex
 	config     *Config
 	stats      map[string]*Stats
 	banChannel chan string
@@ -66,21 +66,21 @@ type PolicyServer struct {
 
 func Start(cfg *Config, storage *storage.RedisClient) *PolicyServer {
 	s := &PolicyServer{config: cfg, startedAt: util.MakeTimestamp()}
-	grace, _ := time.ParseDuration(cfg.Limits.Grace)
+	grace := util.MustParseDuration(cfg.Limits.Grace)
 	s.grace = int64(grace / time.Millisecond)
 	s.banChannel = make(chan string, 64)
 	s.stats = make(map[string]*Stats)
 	s.storage = storage
 	s.refreshState()
 
-	timeout, _ := time.ParseDuration(s.config.ResetInterval)
+	timeout := util.MustParseDuration(s.config.ResetInterval)
 	s.timeout = int64(timeout / time.Millisecond)
 
-	resetIntv, _ := time.ParseDuration(s.config.ResetInterval)
+	resetIntv := util.MustParseDuration(s.config.ResetInterval)
 	resetTimer := time.NewTimer(resetIntv)
 	log.Printf("Set policy stats reset every %v", resetIntv)
 
-	refreshIntv, _ := time.ParseDuration(s.config.RefreshInterval)
+	refreshIntv := util.MustParseDuration(s.config.RefreshInterval)
 	refreshTimer := time.NewTimer(refreshIntv)
 	log.Printf("Set policy state refresh every %v", refreshIntv)
 
@@ -130,6 +130,8 @@ func (s *PolicyServer) resetStats() {
 			atomic.StoreInt64(&m.BannedAt, 0)
 			if atomic.CompareAndSwapInt32(&m.Banned, 1, 0) {
 				log.Printf("Ban dropped for %v", key)
+				delete(s.stats, key)
+				total++
 			}
 		}
 		if now-lastBeat >= s.timeout {
@@ -165,16 +167,27 @@ func (s *PolicyServer) NewStats() *Stats {
 }
 
 func (s *PolicyServer) Get(ip string) *Stats {
-	s.statsMu.RLock()
-	defer s.statsMu.RUnlock()
+	s.statsMu.Lock()
+	defer s.statsMu.Unlock()
 
-	if x, ok := s.stats[ip]; ok {
+	if x, ok := s.stats[ip]; !ok {
+		x = s.NewStats()
+		s.stats[ip] = x
+		return x
+	} else {
 		x.heartbeat()
 		return x
 	}
-	x := s.NewStats()
-	s.stats[ip] = x
-	return x
+}
+
+func (s *PolicyServer) BanClient(ip string) {
+	x := s.Get(ip)
+	s.forceBan(x, ip)
+}
+
+func (s *PolicyServer) IsBanned(ip string) bool {
+	x := s.Get(ip)
+	return atomic.LoadInt32(&x.Banned) > 0
 }
 
 func (s *PolicyServer) ApplyLimitPolicy(ip string) bool {
@@ -197,19 +210,18 @@ func (s *PolicyServer) ApplyLoginPolicy(addy, ip string) bool {
 	return true
 }
 
-func (s *PolicyServer) ApplyMalformedPolicy(ip string) {
+func (s *PolicyServer) ApplyMalformedPolicy(ip string) bool {
 	x := s.Get(ip)
 	n := x.incrMalformed()
 	if n >= s.config.Banning.MalformedLimit {
 		s.forceBan(x, ip)
+		return false
 	}
+	return true
 }
 
 func (s *PolicyServer) ApplySharePolicy(ip string, validShare bool) bool {
 	x := s.Get(ip)
-	if validShare && s.config.Limits.Enabled {
-		s.Get(ip).incrLimit(s.config.Limits.LimitJump)
-	}
 	x.Lock()
 
 	if validShare {
@@ -231,11 +243,6 @@ func (s *PolicyServer) ApplySharePolicy(ip string, validShare bool) bool {
 	x.resetShares()
 	x.Unlock()
 
-	if invalidShares == 0 {
-		return true
-	}
-
-	// Can be +Inf or value, previous check prevents NaN
 	ratio := invalidShares / validShares
 
 	if ratio >= s.config.Banning.InvalidPercent/100.0 {
@@ -259,6 +266,8 @@ func (s *PolicyServer) forceBan(x *Stats, ip string) {
 	if atomic.CompareAndSwapInt32(&x.Banned, 0, 1) {
 		if len(s.config.Banning.IPSet) > 0 {
 			s.banChannel <- ip
+		} else {
+			log.Println("Banned peer", ip)
 		}
 	}
 }

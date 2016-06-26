@@ -2,14 +2,20 @@ package rpc
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"math/big"
 	"net/http"
-	"regexp"
+	"strconv"
+	"strings"
 	"sync"
-	"time"
+
+	"github.com/ethereum/go-ethereum/common"
+
+	"../util"
 )
 
 type RPCClient struct {
@@ -41,6 +47,8 @@ type GetBlockReply struct {
 	Timestamp        string   `json:"timestamp"`
 	Transactions     []Tx     `json:"transactions"`
 	Uncles           []string `json:"uncles"`
+	// https://github.com/ethereum/EIPs/issues/95
+	SealFields []string `json:"sealFields"`
 }
 
 type GetBlockReplyPart struct {
@@ -65,11 +73,9 @@ type JSONRpcResp struct {
 	Error  map[string]interface{} `json:"error"`
 }
 
-var zeroHash = regexp.MustCompile("^0?x?0+$")
-
 func NewRPCClient(name, url, timeout string) *RPCClient {
 	rpcClient := &RPCClient{Name: name, Url: url}
-	timeoutIntv, _ := time.ParseDuration(timeout)
+	timeoutIntv := util.MustParseDuration(timeout)
 	rpcClient.client = &http.Client{
 		Timeout: timeoutIntv,
 	}
@@ -167,6 +173,48 @@ func (r *RPCClient) SubmitBlock(params []string) (bool, error) {
 	return result, nil
 }
 
+func (r *RPCClient) GetBalance(address string) (*big.Int, error) {
+	rpcResp, err := r.doPost(r.Url, "eth_getBalance", []string{address, "latest"})
+	var reply string
+	if err != nil {
+		return nil, err
+	}
+	if rpcResp.Error != nil {
+		return nil, errors.New(rpcResp.Error["message"].(string))
+	}
+	if rpcResp.Result != nil {
+		err = json.Unmarshal(*rpcResp.Result, &reply)
+	}
+	return common.String2Big(reply), err
+}
+
+func (r *RPCClient) Sign(from string, s string) (string, error) {
+	hash := sha256.Sum256([]byte(s))
+	rpcResp, err := r.doPost(r.Url, "eth_sign", []string{from, common.ToHex(hash[:])})
+	var reply string
+	if err != nil {
+		return reply, err
+	}
+	if rpcResp.Error != nil {
+		return reply, errors.New(rpcResp.Error["message"].(string))
+	}
+	err = json.Unmarshal(*rpcResp.Result, &reply)
+	return reply, err
+}
+
+func (r *RPCClient) GetPeerCount() (int64, error) {
+	rpcResp, err := r.doPost(r.Url, "net_peerCount", nil)
+	var reply string
+	if err != nil {
+		return 0, err
+	}
+	if rpcResp.Error != nil {
+		return 0, errors.New(rpcResp.Error["message"].(string))
+	}
+	err = json.Unmarshal(*rpcResp.Result, &reply)
+	return strconv.ParseInt(strings.Replace(reply, "0x", "", -1), 16, 64)
+}
+
 func (r *RPCClient) SendTransaction(from, to, gas, gasPrice, value string, autoGas bool) (string, error) {
 	params := map[string]string{
 		"from":  from,
@@ -183,6 +231,7 @@ func (r *RPCClient) SendTransaction(from, to, gas, gasPrice, value string, autoG
 		return reply, err
 	}
 	if rpcResp.Error != nil {
+		fmt.Println(rpcResp.Error)
 		return reply, errors.New(rpcResp.Error["message"].(string))
 	}
 	err = json.Unmarshal(*rpcResp.Result, &reply)
@@ -191,7 +240,7 @@ func (r *RPCClient) SendTransaction(from, to, gas, gasPrice, value string, autoG
 	 * but Parity returns zero hash 0x000... if it can't send tx, so we must handle this case.
 	 * https://github.com/ethereum/wiki/wiki/JSON-RPC#returns-22
 	 */
-	if zeroHash.MatchString(reply) {
+	if util.IsZeroHash(reply) {
 		err = errors.New("transaction is not yet available")
 	}
 	return reply, err
